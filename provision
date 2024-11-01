@@ -20,10 +20,20 @@ hosts.uniq!
 user_name = config.ssh.user
 
 # Install essential packages
-install_essentials = <<~EOF
+install_debian_essentials = <<~EOF
   apt update;
   apt upgrade -y;
   apt install -y docker.io curl unattended-upgrades
+EOF
+
+install_centos_essentials = <<~EOF
+  dnf upgrade --refresh -y;
+  dnf install -y epel-release;
+  dnf install -y dnf-utils dnf-plugins-core;
+  dnf install -y 'dnf-command(config-manager)';
+  dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo;
+  dnf install -y  docker-ce docker-ce-cli containerd.io;
+  dnf install -y curl firewalld
 EOF
 
 # Prepare storage
@@ -33,8 +43,9 @@ prepare_storage = <<~EOF
   chown 1000:1000 /storage
 EOF
 
+
 # Add swap space
-add_swap = <<~EOF
+add_ubuntu_swap = <<~EOF
   fallocate -l 2GB /swapfile;
   chmod 600 /swapfile;
   mkswap /swapfile;
@@ -44,11 +55,26 @@ add_swap = <<~EOF
   echo "\\nvm.swappiness=20\\n" >> /etc/sysctl.conf
 EOF
 
+add_centos_swap = <<~EOF
+  dd if=/dev/zero of=/swapfile count=2048 bs=1MiB
+  mkswap /swapfile;
+  swapon /swapfile;
+  echo "\\n/swapfile swap swap defaults 0 0\\n" >> /etc/fstab;
+  sysctl vm.swappiness=20;
+  echo "\\nvm.swappiness=20\\n" >> /etc/sysctl.conf
+EOF
+
 # Install fail2ban
-install_fail2ban = <<~EOF
+install_ubtuntu_fail2ban = <<~EOF
   apt install -y fail2ban;
   systemctl start fail2ban;
   systemctl enable fail2ban
+EOF
+
+install_centos_fail2ban = <<~EOF
+  yum install -y fail2ban;
+  systemctl start fail2ban;
+  systemctl enable fail2ban;
 EOF
 
 # Configure firewall
@@ -97,17 +123,33 @@ hosts.each do |host|
   # Run provisioning on server `host`
   Net::SSH.start(host, "root") do |ssh|
     puts "testing command..."
-    puts ssh.exec!("ls -al")
+    result = ssh.exec!("awk -F= '/^NAME/{print $2}' /etc/os-release")
+
+    ubuntu = result.include?("Ubuntu")
     puts "Installing essential packages..."
-    puts ssh.exec!(install_essentials)
+    if ubuntu
+      puts ssh.exec!(install_debian_essentials)
+    else
+      puts ssh.exec!(install_centos_essentials)
+    end
+
     puts "Adding swap space..."
-    puts ssh.exec!(add_swap)
+    if ubuntu
+      puts ssh.exec!(add_ubuntu_swap)
+    else
+      puts ssh.exec!(add_centos_swap)
+    end
+
     puts "Preparing storage for disk service..."
     puts ssh.exec!(prepare_storage)
     puts "Adding user with sudo privileges..."
     puts ssh.exec!(add_user)
     puts "Installing and running fail2ban..."
-    puts ssh.exec!(install_fail2ban)
+    if ubuntu
+      puts ssh.exec!(install_ubuntu_fail2ban)
+    else
+      puts ssh.exec!(install_centos_fail2ban)
+    end
     puts "Configure firewall..."
     puts ssh.exec!(configure_firewall)
     puts "Configure unattended upgrades..."
